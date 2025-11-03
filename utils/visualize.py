@@ -1,0 +1,84 @@
+# Visualization functions here
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+
+
+def visualize_latent_grid(model: torch.nn.Module, device: torch.device, n_steps:int = 32):
+    """
+        This code was taken and slightly modified from the auto-encoder exercise by Oskar Jørgensen.
+    """
+    # Create a grid of points between 0.01 and 0.99
+    x = torch.linspace(0.01, 0.99, n_steps)
+    y = torch.linspace(0.01, 0.99, n_steps)
+
+    # Create a grid of points
+    grid_points = torch.zeros(n_steps * n_steps, 2)
+
+    # Create meshgrid of points
+    X, Y = torch.meshgrid(x, y, indexing='ij')
+
+    # Convert to standard normal values using inverse CDF (probit function)
+    from scipy.stats import norm
+    X = torch.tensor(norm.ppf(X.numpy().astype(np.float32)))
+    Y = torch.tensor(norm.ppf(Y.numpy().astype(np.float32)))
+
+    # Combine into grid points
+    grid_points = torch.stack([X.flatten(), Y.flatten()], dim=1).float().to(device)
+
+    # Generate images from the latent points
+    with torch.no_grad():
+        model.eval()
+        generated = model.decoder(grid_points)
+        generated = generated.reshape(-1, 1, 28, 28)
+
+    _, axes = plt.subplots(n_steps, n_steps, figsize=(8, 8))
+    plt.subplots_adjust(wspace=0, hspace=0)
+    for i in range(n_steps):
+        for j in range(n_steps):
+            axes[i,j].imshow(generated[i * n_steps + j].cpu().squeeze(), cmap='gray')
+            axes[i,j].axis('off')
+
+    plt.show()
+
+
+def visualize_samples(original, samples):
+    fig, axes = plt.subplots(1, 1 + len(samples), figsize=((len(samples) + 1) * 2, 2))
+    original_np = original.squeeze().detach().cpu().numpy()
+    axes[0].imshow(original_np, cmap="gray", vmin=0, vmax=1)
+    axes[0].set_title("Original input")
+    axes[0].axis("off")
+
+    for i, sample in enumerate(samples):
+        sample = sample.reshape_as(original)
+        sample_np = sample.squeeze().detach().cpu().numpy()
+        axes[i+1].imshow(sample_np, cmap="gray", vmin=0, vmax=1)
+        axes[i+1].set_title(f"Sample input {i+1}")
+        axes[i+1].axis("off")
+
+    plt.tight_layout()
+    plt.show()  
+
+
+def visualize_points_in_latent_space(model: torch.nn.Module, trainloader: torch.utils.data.DataLoader):
+    """
+        This code was taken and slightly modified from the auto-encoder exercise by Oskar Jørgensen.
+    """
+    labels = []
+    latent_samples = []
+    with torch.no_grad():
+        model.eval()
+        for x_batch, y_batch in trainloader:
+            x_hat, z, mean, log_var = model(x_batch)
+            latent_samples.extend(z)
+            labels.extend(y_batch)
+    latent_samples = [sample.detach().numpy() for sample in latent_samples]
+    x_coords = []
+    y_coords = []
+    for (x, y) in latent_samples:
+        x_coords.append(x)   
+        y_coords.append(y)   
+
+    plt.scatter(x_coords, y_coords, c=labels, cmap="tab10")
+    plt.colorbar()  
+    plt.plot()
