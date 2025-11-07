@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 from models.base import BaseModel
 
+from stochman.manifold import EmbeddedManifold
+
 
 class VAE_Encoder(nn.Module):
     """
@@ -61,8 +63,10 @@ class Uncertain_VAE_Decoder(nn.Module):
         super().__init__()
         self.fc = nn.Sequential(
             nn.Linear(hidden_dim, out_channels[0]),
-            *[nn.Linear(out_channels[i], out_channels[i+1]) for i in range(len(out_channels) - 1)]
+            *[nn.Linear(out_channels[i], out_channels[i+1]) for i in range(len(out_channels) - 2)]
         )
+        self.mu_head = nn.Linear(in_features=out_channels[-2], out_features=out_channels[-1])
+        self.logvar_head = nn.Linear(in_features=out_channels[-2], out_features=out_channels[-1])
         # self.non_linearity = nn.LeakyReLU()
         self.non_linearity = nn.SiLU()
         # self.non_linearity = nn.GELU()
@@ -71,12 +75,15 @@ class Uncertain_VAE_Decoder(nn.Module):
         for layer in self.fc:
             z = layer(z)
             z = self.non_linearity(z)
-        x_hat = nn.Sigmoid()(z)
+        
+        mu = self.mu_head(z)
+        logvar = self.logvar_head(z)
+        mu = nn.Sigmoid()(mu)
 
-        return x_hat
+        return mu, logvar
 
 
-class VariationalAutoencoder(BaseModel):
+class VariationalAutoencoder(BaseModel, EmbeddedManifold):
     def __init__(self, in_channels, out_channels, hidden_dim: int = 2):
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -91,7 +98,6 @@ class VariationalAutoencoder(BaseModel):
 
         return x_hat, z, mean, log_var
     
-
     def gaussian_sample_in_euclid_space(self, num_samples: int = 1):
         z = torch.randn(num_samples, self.hidden_dim)
         return self.decoder(z)
@@ -116,6 +122,9 @@ class VariationalAutoencoder(BaseModel):
         kl_loss *= 1e-2
         return reconstruction_loss + kl_loss, reconstruction_loss, kl_loss
     
+    def embed(self, c, jacobian = False):
+        return self.decoder(c)
+    
     def loss_legend(self,):
         return ["Loss", "Reconstruction Loss", "KL Loss"]
     
@@ -123,6 +132,8 @@ class VariationalAutoencoder(BaseModel):
         return "vae"
     
 
+
+# TODO: alter this to be a one-layer hierarchical VAE (where I can retrieve mean and variance of the decoder and pass them through a softmax)
 class GaussianVariationalAutoencoder(BaseModel):
     """
     In this VAE, the decoder will produce a mean and variance output.
@@ -132,19 +143,16 @@ class GaussianVariationalAutoencoder(BaseModel):
         self.hidden_dim = hidden_dim
 
         self.encoder = VAE_Encoder(in_channels, hidden_dim)
-        self.mu_decoder = VAE_Decoder(out_channels, hidden_dim)
-        self.logvar_decoder = VAE_Decoder(out_channels, hidden_dim)
+        self.decoder = Uncertain_VAE_Decoder(out_channels, hidden_dim)
 
-        self.mu_training = True
         self.beta = beta
 
     def forward(self, x):
         mean, log_var = self.encoder(x)
         z = self.reparameterize(mean, log_var)
-        mu_hat = self.mu_decoder(z)
-        log_var_hat = self.logvar_decoder(z)
+        mu_dec, logvar_dec = self.decoder(z)
 
-        return (mu_hat, log_var_hat), z, mean, log_var
+        return (mu_dec, logvar_dec), z, mean, log_var
 
     def gaussian_sample_in_euclid_space(self, num_samples: int = 1):
         z = torch.randn(num_samples, self.hidden_dim)
@@ -166,28 +174,20 @@ class GaussianVariationalAutoencoder(BaseModel):
 
         x_hat = x_hat.reshape_as(x)
         log_var_hat = log_var_hat.reshape_as(x)
-
-        reconstruction_loss = torch.Tensor([0])
-        kl_loss = torch.Tensor([0])
-        nll = torch.Tensor([0])
+        residual = (x-x_hat).pow(2)
         
-        if self.mu_training:
-            reconstruction_loss = torch.nn.BCELoss(reduction="sum")(x_hat, x)
-            # reconstruction_loss = torch.nn.MSELoss()(x_hat, x)
+        log_var_hat = log_var_hat.clamp(min=-50, max=50)
+        var = torch.exp(log_var_hat).clamp(min=1e-8, max=1e8)
+        reconstruction_loss = 0.5 * torch.mean((log_var_hat + (residual) / var))
 
-            encoder_log_var = torch.clamp(encoder_log_var, min=-10, max=10) # I do this to make the logvar more numerically stable.
-            kl_loss = - 0.5 * torch.mean(torch.sum(1 + (encoder_log_var) - (torch.exp(encoder_log_var)) - (mean**2), dim=1), dim=0) 
-            total_loss = reconstruction_loss + self.beta * kl_loss
+        encoder_log_var = torch.clamp(encoder_log_var, min=-10, max=10) # I do this to make the logvar more numerically stable.
+        kl_loss = - 0.5 * torch.mean(torch.sum(1 + (encoder_log_var) - (torch.exp(encoder_log_var)) - (mean**2), dim=1), dim=0) 
+        total_loss = reconstruction_loss + self.beta * kl_loss
 
-        # Loss for variance
-        else: 
-            nll = torch.nn.GaussianNLLLoss(full=True)(x, x_hat, log_var_hat)
-            total_loss = nll
-
-        return total_loss, reconstruction_loss, kl_loss, nll
+        return total_loss, reconstruction_loss, kl_loss
     
     def loss_legend(self,):
-        return ["Loss", "Reconstruction Loss", "KL Loss", "Gaussian NLL Loss"]
+        return ["Loss", "Gaussian Reconstruction Loss", "KL Loss"]
     
     def short_name(self,):
         return "gaussian-vae"
