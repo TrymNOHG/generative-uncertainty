@@ -2,6 +2,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from utils.riemann import log_riemann_volume, log_random_riemann_volume
 
 def visualize_latent_grid(model: torch.nn.Module, device: torch.device, n_steps:int = 32):
     """
@@ -39,6 +40,95 @@ def visualize_latent_grid(model: torch.nn.Module, device: torch.device, n_steps:
             axes[i,j].axis('off')
 
     plt.show()
+
+
+def visualize_latent_uncertainty_grid(model: torch.nn.Module, device: torch.device, n_steps: int = 32):
+    """
+    This visualization code was partially taken from ChatGPT.
+    """
+    model.eval()
+
+    x = torch.linspace(0.01, 0.99, n_steps)
+    y = torch.linspace(0.01, 0.99, n_steps)
+
+    X, Y = torch.meshgrid(x, y, indexing="ij")  
+
+    from scipy.stats import norm
+    X = torch.tensor(norm.ppf(X.numpy().astype(np.float32)), dtype=torch.float32)
+    Y = torch.tensor(norm.ppf(Y.numpy().astype(np.float32)), dtype=torch.float32)
+
+    grid_points = torch.stack([X.flatten(), Y.flatten()],dim=1).to(device)  
+
+    with torch.no_grad():
+        log_vol = log_riemann_volume(model.decoder, grid_points)  
+
+    plt.figure(figsize=(6, 5))
+
+    z1_min, z1_max = X.min().item(), X.max().item()
+    z2_min, z2_max = Y.min().item(), Y.max().item()
+
+    values = log_vol.cpu().reshape(n_steps, n_steps)
+    label = "log Riemann volume element"
+
+    im = plt.imshow(
+        values,
+        origin="lower",
+        extent=[z1_min, z1_max, z2_min, z2_max],
+        aspect="equal",
+        cmap="viridis",
+    )
+    plt.xlabel("z1")
+    plt.ylabel("z2")
+    cbar = plt.colorbar(im)
+    cbar.set_label(label)
+    plt.title("Latent Riemannian volume over 2D grid")
+    plt.tight_layout()
+    plt.show()
+
+def visualize_latent_uncertainty_grid_random(mu_decoder: torch.nn.Module, var_decoder: torch.nn.Module, device: torch.device, n_steps: int = 32):
+    """
+    This visualization code was partially taken from ChatGPT.
+    """
+    mu_decoder.eval()
+    var_decoder.eval()
+
+    x = torch.linspace(0.01, 0.99, n_steps)
+    y = torch.linspace(0.01, 0.99, n_steps)
+
+    X, Y = torch.meshgrid(x, y, indexing="ij")  
+
+    from scipy.stats import norm
+    X = torch.tensor(norm.ppf(X.numpy().astype(np.float32)), dtype=torch.float32)
+    Y = torch.tensor(norm.ppf(Y.numpy().astype(np.float32)), dtype=torch.float32)
+
+    grid_points = torch.stack([X.flatten(), Y.flatten()],dim=1).to(device)  
+
+    with torch.no_grad():
+        log_vol = log_random_riemann_volume(mu_decoder, var_decoder, grid_points)  
+
+    plt.figure(figsize=(6, 5))
+
+    z1_min, z1_max = X.min().item(), X.max().item()
+    z2_min, z2_max = Y.min().item(), Y.max().item()
+
+    values = log_vol.cpu().reshape(n_steps, n_steps)
+    label = "log Riemann volume element"
+
+    im = plt.imshow(
+        values,
+        origin="lower",
+        extent=[z1_min, z1_max, z2_min, z2_max],
+        aspect="equal",
+        cmap="viridis",
+    )
+    plt.xlabel("z1")
+    plt.ylabel("z2")
+    cbar = plt.colorbar(im)
+    cbar.set_label(label)
+    plt.title("Latent Riemannian volume over 2D grid")
+    plt.tight_layout()
+    plt.show()
+
 
 
 def visualize_samples(original, samples):

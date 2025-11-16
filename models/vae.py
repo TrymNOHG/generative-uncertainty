@@ -51,9 +51,10 @@ class VAE_Decoder(nn.Module):
         # self.non_linearity = nn.GELU()
 
     def forward(self, z):
-        for layer in self.fc:
+        for layer in self.fc[:-1]:
             z = layer(z)
             z = self.non_linearity(z)
+        z = self.fc[-1](z)
         x_hat = nn.Sigmoid()(z)
 
         return x_hat
@@ -81,6 +82,26 @@ class Uncertain_VAE_Decoder(nn.Module):
         mu = nn.Sigmoid()(mu)
 
         return mu, logvar
+    
+class RBF_VAE_Decoder(nn.Module):
+    def __init__(self, out_channels, hidden_dim, rbf):
+        super().__init__()
+        self.vae_decoder = VAE_Decoder(out_channels, hidden_dim)
+        
+        # Freezing the rbf decoder.
+        rbf.eval()
+        for param in rbf.parameters():
+            param.requires_grad = False
+        
+        self.rbf = rbf
+
+    def forward(self, z):
+        mean = self.vae_decoder(z)
+        var = 1 / (self.rbf(z) + 1e-8)
+
+        eps = torch.randn_like(mean)
+        var = var * eps
+        return mean + var
 
 
 class VariationalAutoencoder(BaseModel, EmbeddedManifold):
@@ -191,4 +212,62 @@ class GaussianVariationalAutoencoder(BaseModel):
     
     def short_name(self,):
         return "gaussian-vae"
+
+class HierarchicalVariationalAutoencoder(BaseModel):
+    """
+    In this VAE, the decoder will produce a mean and variance output.
+    """
+    def __init__(self, in_channels, out_channels, beta: float = 1e-2, hidden_dim: int = 2):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+
+        self.encoder = VAE_Encoder(in_channels, hidden_dim)
+        self.decoder = VAE_Decoder(out_channels, hidden_dim)
+
+        self.beta = beta
+
+    def forward(self, x):
+        mean, log_var = self.encoder(x)
+        z = self.reparameterize(mean, log_var)
+        mu_dec, logvar_dec = self.decoder(z)
+
+        return (mu_dec, logvar_dec), z, mean, log_var
+
+    def gaussian_sample_in_euclid_space(self, num_samples: int = 1):
+        z = torch.randn(num_samples, self.hidden_dim)
+        return self.mu_decoder(z)
+    
+    def predict(self, x):
+        return self.forward(x)[0]
+
+    def reconstruct(self, z):
+        return self.mu_decoder(z)[0] # 0 correct here?
+    
+    def reparameterize(self, mean, log_var):
+        eps = torch.randn_like(mean)
+        var = torch.exp(0.5 * log_var) * eps
+        return mean + var
+    
+    def loss(self, x: torch.Tensor, y: torch.Tensor):
+        (x_hat, log_var_hat), _, mean, encoder_log_var = self.forward(x)
+
+        x_hat = x_hat.reshape_as(x)
+        log_var_hat = log_var_hat.reshape_as(x)
+        residual = (x-x_hat).pow(2)
+        
+        log_var_hat = log_var_hat.clamp(min=-50, max=50)
+        var = torch.exp(log_var_hat).clamp(min=1e-8, max=1e8)
+        reconstruction_loss = 0.5 * torch.mean((log_var_hat + (residual) / var))
+
+        encoder_log_var = torch.clamp(encoder_log_var, min=-10, max=10) # I do this to make the logvar more numerically stable.
+        kl_loss = - 0.5 * torch.mean(torch.sum(1 + (encoder_log_var) - (torch.exp(encoder_log_var)) - (mean**2), dim=1), dim=0) 
+        total_loss = reconstruction_loss + self.beta * kl_loss
+
+        return total_loss, reconstruction_loss, kl_loss
+    
+    def loss_legend(self,):
+        return ["Loss", "Gaussian Reconstruction Loss", "KL Loss"]
+    
+    def short_name(self,):
+        return "hierarchical-vae"
     

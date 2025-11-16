@@ -45,7 +45,7 @@ def brute_force_metric_sampling(model, x_test, device, scale=1e2, num_samples=5)
     latent_samples = [gauss_sample(mean, log_var) for _ in range(10_000)]
     # Calculate distance between these and the original on the manifold using metric
 
-def geodesic_sampling(model: EmbeddedManifold, z_train_dict: dict, x_test, prediction: int, device, num_samples=5):
+def geodesic_sampling_close(model: EmbeddedManifold, z_train_dict: dict, x_test, prediction: int, device, num_samples=5):
     """
         In this sampling method, a geodesic is drawn between the given test point and a randomly chosen train datapoint with the same label as the predicted label for 
         the test input. This idea was inspired by Data Generation in Low Sample Size Setting Using Manifold Sampling and a Geometry-Aware VAE - Chadebec et. al 2021.
@@ -64,6 +64,32 @@ def geodesic_sampling(model: EmbeddedManifold, z_train_dict: dict, x_test, predi
                 print(f"Curve {i} has geodesic length: {curve.euclidean_length().item()}")
                 points, _ = points_on_geodesic(curve, 10, 0, 0.1)
                 latent_point = points.squeeze(0)[random.randint(0, 4)]
+                sample = model.decoder(latent_point)
+                samples.append(sample)
+            except:
+                break
+        
+    return samples
+
+def geodesic_sampling_whole(model: EmbeddedManifold, z_train_dict: dict, x_test, prediction: int, device, num_samples=5):
+    """
+        In this sampling method, a geodesic is drawn between the given test point and a randomly chosen train datapoint with the same label as the predicted label for 
+        the test input. This idea was inspired by Data Generation in Low Sample Size Setting Using Manifold Sampling and a Geometry-Aware VAE - Chadebec et. al 2021.
+    """
+    model.eval()
+    with torch.no_grad():
+        _, z1, _, _ = model(x_test)
+
+        z_class = z_train_dict[prediction]
+        
+        samples = []
+        for i in range(num_samples):
+            try:
+                z2 = z_class[i]
+                curve = find_geodesic(model, z1, z2)
+                print(f"Curve {i} has geodesic length: {curve.euclidean_length().item()}")
+                points, _ = points_on_geodesic(curve, 10, 0, 1)
+                latent_point = points.squeeze(0)[random.randint(0, 9)]
                 sample = model.decoder(latent_point)
                 samples.append(sample)
             except:
