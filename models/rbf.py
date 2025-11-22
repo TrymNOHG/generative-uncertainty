@@ -30,25 +30,20 @@ class RBFNet(BaseModel):
         self.W = nn.Linear(in_features=K, out_features=output_dim, bias=False) # D x K dimensions (Cannot be negative)
         self.loss_func = torch.nn.MSELoss()
 
-        # To ensure non-negativity, during training an additional projection step will be used.
+        # To ensure non-negativity, during training an additional projection step should be used. But instead I just clamp it.
 
     def forward(self, x: torch.Tensor):
-        diff = x.unsqueeze(1) - self.centers.unsqueeze(0) # Give x the centers dim and centers the batch dim (batch, K, latent_dim).
+        diff = x.unsqueeze(1) - self.centers.unsqueeze(0) 
         l2 = diff.pow(2).sum(dim=-1)
         v_k = torch.exp(-self.bandwidths * l2)
         beta = self.W(v_k) + self.eps
         return beta
 
-    # TODO: Program a uncertainty aware decoder (outputs mean and var)
 
-    # TODO: next start leveraging the random manifold
-    # TODO: Calculate geodesics, sample, etc.
     def loss(self, z, target_var):
-        # target_var = target_var.clamp_min(1e-6)
-        # target_var = target_var * 0.1  # <-- rescale
         beta = self.forward(z).reshape_as(target_var).clamp_min(1e-6)
         nll = 0.5 * (-torch.log(beta) + beta * target_var) # From Gaussian NLL, but since beta = 1/var, then I can take -log(beta) to get more numerical stability.
-        return nll.mean() * 1e-6
+        return nll.mean()
 
 
     def loss_legend(self,):

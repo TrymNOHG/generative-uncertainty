@@ -60,7 +60,11 @@ def visualize_latent_uncertainty_grid(model: torch.nn.Module, device: torch.devi
     grid_points = torch.stack([X.flatten(), Y.flatten()],dim=1).to(device)  
 
     with torch.no_grad():
-        log_vol = log_riemann_volume(model.decoder, grid_points)  
+        if hasattr(model, "decoder"):
+            log_vol = log_riemann_volume(model.decoder, grid_points)
+        else:
+            log_vol = log_riemann_volume(model, grid_points)
+
 
     plt.figure(figsize=(6, 5))
 
@@ -256,3 +260,111 @@ def visualize_preds(model: torch.nn.Module, trainloader: torch.utils.data.DataLo
 def visualize_img_pred(img, pred):
     plt.imshow(img.squeeze(0, 1).numpy(), cmap='gray')
     plt.title(f"Pred: {pred}")
+
+
+def visualize_uncertainty(
+    rbf_net,
+    z_s,
+    dim0=0,
+    dim1=1,
+    grid_points=100,
+    device="cpu",
+    log_scale=False,
+    vmax=None, 
+    z_label="train"        
+):
+    """
+    THIS VISUALIZATION CODE WAS MAINLY GENERATED USING CHATGPT
+    Visualize uncertainty (variance = 1/beta) over a 2D slice of latent space.
+
+    rbf_net: trained RBFNet
+    z_train: [N, z_dim] tensor of encoded train latents (used to set plot range)
+    dim0, dim1: which latent dims to plot
+    log_scale: if True, plot log(mean variance) instead of mean variance
+    vmax: if not None, clamp mean variance to this max before plotting
+    """
+    rbf_net.eval()
+    rbf_net.to(device)
+
+    if type(z_s) is torch.Tensor:
+        z_s = z_s.detach().cpu()
+    z_min = z_s[:, [dim0, dim1]].min(dim=0).values
+    z_max = z_s[:, [dim0, dim1]].max(dim=0).values
+
+    # add a little padding
+    pad = 0.1 * (z_max - z_min)
+    z_min = z_min - pad
+    z_max = z_max + pad
+
+    # build grid
+    x_lin = torch.linspace(z_min[0].item(), z_max[0].item(), grid_points)
+    y_lin = torch.linspace(z_min[1].item(), z_max[1].item(), grid_points)
+    X, Y = torch.meshgrid(x_lin, y_lin, indexing="ij")  # [G,G]
+
+    # flatten to (G*G, 2) and pad to full latent dim if needed
+    z_dim = z_s.shape[1]
+    Z = torch.zeros(grid_points * grid_points, z_dim)
+    Z[:, dim0] = X.reshape(-1)
+    Z[:, dim1] = Y.reshape(-1)
+
+    Z = Z.to(device)
+    with torch.no_grad():
+        beta = rbf_net(Z)               # [G*G, D]
+        # turn precision into variance
+        var = 1 / beta                  # [G*G, D]
+        # aggregate over output dims: mean variance
+        var_mean = var.mean(dim=1)      # [G*G]
+
+    # keep original stats (unclamped, linear)
+    print("Uncertainty stats (mean variance over outputs):")
+    print(f"  min:  {var_mean.min().item():.4f}")
+    print(f"  max:  {var_mean.max().item():.4f}")
+    print(f"  mean: {var_mean.mean().item():.4f}")
+    print(f"  std:  {var_mean.std().item():.4f}")
+
+    # transform for plotting
+    var_plot = var_mean.clone()
+
+    # 1) optional clamp
+    if vmax is not None:
+        var_plot = torch.clamp(var_plot, max=vmax)
+
+    # 2) optional log-scale
+    if log_scale:
+        eps = 1e-8  # avoid log(0)
+        var_plot = torch.log(var_plot + eps)
+
+    var_img = var_plot.reshape(grid_points, grid_points).cpu().numpy()
+
+    # -------------------------------------------------------
+    # Plot heatmap
+    # -------------------------------------------------------
+    plt.figure(figsize=(5, 4))
+    title = "Uncertainty (mean variance) over latent space"
+    if log_scale:
+        title = "Uncertainty (log mean variance) over latent space"
+    plt.title(title)
+
+    plt.imshow(
+        var_img.T,
+        origin="lower",
+        extent=[z_min[0].item(), z_max[0].item(), z_min[1].item(), z_max[1].item()],
+        cmap="magma"
+    )
+    cbar_label = "mean variance"
+    if log_scale:
+        cbar_label = "log(mean variance)"
+    plt.colorbar(label=cbar_label)
+
+    # overlay training latents
+    plt.scatter(
+        z_s[:, dim0].numpy(),
+        z_s[:, dim1].numpy(),
+        s=5,
+        c="cyan",
+        alpha=0.6,
+        label=f"{z_label} z"
+    )
+    plt.legend()
+    plt.tight_layout()
+    plt.show()

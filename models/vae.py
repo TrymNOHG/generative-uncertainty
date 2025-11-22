@@ -183,7 +183,7 @@ class GaussianVariationalAutoencoder(BaseModel):
         return self.forward(x)[0]
 
     def reconstruct(self, z):
-        return self.mu_decoder(z)[0] # 0 correct here?
+        return self.mu_decoder(z)[0] 
     
     def reparameterize(self, mean, log_var):
         eps = torch.randn_like(mean)
@@ -241,7 +241,7 @@ class HierarchicalVariationalAutoencoder(BaseModel):
         return self.forward(x)[0]
 
     def reconstruct(self, z):
-        return self.mu_decoder(z)[0] # 0 correct here?
+        return self.mu_decoder(z)[0]
     
     def reparameterize(self, mean, log_var):
         eps = torch.randn_like(mean)

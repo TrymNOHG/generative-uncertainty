@@ -31,9 +31,6 @@ def gaussian_sampling_rbf(model: BaseModel, rbf: RBFNet, x, device, scale=1e2, n
     output_samples = [gauss_sample(mean, var) for mean, var in zip(outputs, output_variance)]
     return output_samples
 
-
-# Metric aware sampling
-
 def brute_force_metric_sampling(model, x_test, device, scale=1e2, num_samples=5):
     """
     In this sampling method, a significant amount of latent points will be sampled. The distance between these points and the original test input will be found using 
@@ -45,7 +42,7 @@ def brute_force_metric_sampling(model, x_test, device, scale=1e2, num_samples=5)
     latent_samples = [gauss_sample(mean, log_var) for _ in range(10_000)]
     # Calculate distance between these and the original on the manifold using metric
 
-def geodesic_sampling_close(model: EmbeddedManifold, z_train_dict: dict, x_test, prediction: int, device, num_samples=5):
+def geodesic_sampling_close(model: EmbeddedManifold, z_train_dict: dict, x_test, prediction: int, device, num_samples=5, log=True):
     """
         In this sampling method, a geodesic is drawn between the given test point and a randomly chosen train datapoint with the same label as the predicted label for 
         the test input. This idea was inspired by Data Generation in Low Sample Size Setting Using Manifold Sampling and a Geometry-Aware VAE - Chadebec et. al 2021.
@@ -61,17 +58,18 @@ def geodesic_sampling_close(model: EmbeddedManifold, z_train_dict: dict, x_test,
             try:
                 z2 = z_class[i]
                 curve = find_geodesic(model, z1, z2)
-                print(f"Curve {i} has geodesic length: {curve.euclidean_length().item()}")
+                if log:
+                    print(f"Curve {i} has geodesic length: {curve.euclidean_length().item()}")
                 points, _ = points_on_geodesic(curve, 10, 0, 0.1)
                 latent_point = points.squeeze(0)[random.randint(0, 4)]
                 sample = model.decoder(latent_point)
                 samples.append(sample)
-            except:
-                break
+            except Exception as e:
+                print(e)
         
     return samples
 
-def geodesic_sampling_whole(model: EmbeddedManifold, z_train_dict: dict, x_test, prediction: int, device, num_samples=5):
+def geodesic_sampling_whole(model: EmbeddedManifold, z_train_dict: dict, x_test, prediction: int, device, num_samples=5, log=True):
     """
         In this sampling method, a geodesic is drawn between the given test point and a randomly chosen train datapoint with the same label as the predicted label for 
         the test input. This idea was inspired by Data Generation in Low Sample Size Setting Using Manifold Sampling and a Geometry-Aware VAE - Chadebec et. al 2021.
@@ -87,7 +85,8 @@ def geodesic_sampling_whole(model: EmbeddedManifold, z_train_dict: dict, x_test,
             try:
                 z2 = z_class[i]
                 curve = find_geodesic(model, z1, z2)
-                print(f"Curve {i} has geodesic length: {curve.euclidean_length().item()}")
+                if log:
+                    print(f"Curve {i} has geodesic length: {curve.euclidean_length().item()}")
                 points, _ = points_on_geodesic(curve, 10, 0, 1)
                 latent_point = points.squeeze(0)[random.randint(0, 9)]
                 sample = model.decoder(latent_point)
@@ -97,7 +96,7 @@ def geodesic_sampling_whole(model: EmbeddedManifold, z_train_dict: dict, x_test,
         
     return samples
 
-def geodesic_interpolation_x(model: EmbeddedManifold, z_train_dict: dict, x_test, class_val: int, device, num_steps=5):
+def geodesic_interpolation_x(model: EmbeddedManifold, z_train_dict: dict, x_test, class_val: int, device, num_steps=5, log=True):
     """
         In this sampling method, a geodesic is drawn between the given test point and a randomly chosen train datapoint with the same label as the predicted label for 
         the test input. This idea was inspired by Data Generation in Low Sample Size Setting Using Manifold Sampling and a Geometry-Aware VAE - Chadebec et. al 2021.
@@ -111,7 +110,8 @@ def geodesic_interpolation_x(model: EmbeddedManifold, z_train_dict: dict, x_test
         
         samples = []
         curve = find_geodesic(model, z1, z2)
-        print(f"Curve has geodesic length: {curve.euclidean_length().item()}")
+        if log:
+            print(f"Curve has geodesic length: {curve.euclidean_length().item()}")
         points, _ = points_on_geodesic(curve, num_steps, 0, 1.0)
         points = points.squeeze(0)
         for i in range(num_steps):
@@ -146,8 +146,28 @@ def geodesic_interpolation_z(model: EmbeddedManifold, z1: torch.Tensor, z2: torc
                 break
         
     return samples
-    
-    # TODO: now sample along these curves.
+
+
+def euclidean_interpolation_z(model: EmbeddedManifold, z1: torch.Tensor, z2: torch.Tensor, num_steps=5):
+    """
+    A simple interpolation between two points in the latent space.
+    """
+    model.eval()
+    with torch.no_grad():
+        samples = []
+        vector = z2 - z1 
+
+        print(f"Euclidean length: {torch.norm(vector, p=2)}")
+        points = [z1 + vector * (i/(num_steps-1)) for i in range(num_steps)]
+        for i in range(num_steps):
+            try:
+                latent_point = points[i]
+                sample = model.decoder(latent_point)
+                samples.append(sample)
+            except:
+                break
+        
+    return samples
 
 def wrapped_normal_dist_sampling(model, x_test, device, num_samples=5):
     """
@@ -155,6 +175,7 @@ def wrapped_normal_dist_sampling(model, x_test, device, num_samples=5):
     The sampling method works by constructing a distribution on the manifold utilizing the maximum entropy distribution and the geodesic distance. 
     Essentially, a eucldiean normal distribution is placed in the tangent space and moved onto the manifold.
     """
+    pass
 
 def metric_aware_sampling(model, x, device, num_samples=5):
     mean, log_var = model.encoder(x.to(device)) # Latent encoding
